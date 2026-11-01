@@ -1,0 +1,31 @@
+# مستودع عام: قائمة بيضاء. كل شيء مستبعد إلا ملفات البرنامج المذكورة صراحة.
+# بيانات المستخدم والنسخ الاحتياطية والمفاتيح والملاحظات الداخلية لا تُرفع أبداً.
+/*
+
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/server.js
+!/version.json
+!/index.html
+!/favicon.ico
+!/Start-EInvoice.vbs
+!/app/
+!/server/
+!/tools/
+!/tests/
+
+# داخل المجلدات المسموحة
+/tools/glass-preview.html
+*.local.json
+*.einv
+# ملف تجربة مصطنع (حسابات admin / aud) تحتاجه اختبارات التوافق
+!/tests/fixtures/v1-browser.einv
+*.lnk
+*.pem
+*.key
+.env*
+APIs*
+access-token*
+.login-lock*
+node_modules/

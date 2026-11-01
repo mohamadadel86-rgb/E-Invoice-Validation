@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>اختبارات الواجهة — تكامل مع الخادم</title>
+<style>
+  body { font-family: Tahoma, sans-serif; padding: 20px; line-height: 1.8 }
+  .ok { color: #0a6b3a } .bad { color: #b42318; font-weight: 700 }
+  li { margin: 2px 0 }
+</style>
+</head>
+<body>
+<!-- التشغيل: node tests/start-ui-test-server.js  ثم افتح الرابط "url" المطبوع (يضع كوكي الدخول) ثم الرابط "test".
+     يعمل على خادم مؤقت ببيانات فارغة ومزودين وهميين، ولا يلمس بيانات المستخدم. الصفحة تُقدَّم فقط في وضع الاختبار. -->
+<h2>اختبارات الواجهة — تكامل مع الخادم</h2>
+<div id="summary">جاري التشغيل...</div>
+<ul id="list"></ul>
+<script src="/app/js/util.js"></script>
+<script src="/app/js/db.js"></script>
+<script src="/app/js/ai.js"></script>
+<script src="/app/js/invoice.js"></script>
+<script src="/app/js/engine.js"></script>
+<script src="/app/js/settings.js"></script>
+<script src="/app/js/activity.js"></script>
+<script src="/app/js/eta.js"></script>
+<script src="/app/js/quotes.js"></script>
+<script src="/app/js/envelopes.js"></script>
+<script src="/app/js/reports.js"></script>
+<script src="/app/js/etadocs.js"></script>
+<script src="/tests/ui-tests.js"></script>
+</body>
+</html>

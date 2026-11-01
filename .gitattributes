@@ -1,0 +1,5 @@
+# ملفات .vbs بترميز UTF-16 LE مع BOM: أي تحويل لنهايات الأسطر يفسدها
+*.vbs binary
+*.einv binary
+*.ico binary
+*.png binary
