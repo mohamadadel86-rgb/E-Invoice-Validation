@@ -14,6 +14,7 @@
 !/server/
 !/tools/
 !/tests/
+!/assets/
 
 # داخل المجلدات المسموحة
 /tools/glass-preview.html

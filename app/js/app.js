@@ -148,6 +148,7 @@ App.route = async () => {
         (href === '#/reports/41' && active === '#/reports' && !['#/reports', '#/reports/restaurants'].includes(location.hash));
       return h('a', { href, class: isActive ? 'active' : '' }, label);
     }),
+    Wellness.sideCard(),
     h('div', { class: 'who' },
       App.storeStatus(),
       h('div', null, `${DB.user.displayName} · ${DB.user.role === 'admin' ? 'مدير' : 'مراجع'}`),

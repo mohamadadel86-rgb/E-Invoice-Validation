@@ -58,7 +58,7 @@ Settings.account = async () => {
   const oldP = h('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
   const newP = h('input', { class: 'input', type: 'password', autocomplete: 'new-password' });
   const newP2 = h('input', { class: 'input', type: 'password', autocomplete: 'new-password' });
-  return h('div', { class: 'card' },
+  const pwCard = h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', null, 'تغيير كلمة المرور')),
     h('div', { class: 'card-body', style: 'display:flex;flex-direction:column;gap:12px;max-width:420px' },
       h('div', { class: 'muted small' }, `المستخدم: ${DB.user.username} · ${DB.user.displayName}`),
@@ -75,6 +75,7 @@ Settings.account = async () => {
           U.toast('تم تغيير كلمة المرور', 'ok');
         },
       }, 'حفظ'))));
+  return h('div', { style: 'display:flex;flex-direction:column;gap:14px' }, pwCard, await Wellness.settingsCard());
 };
 
 /* ===== الذكاء الاصطناعي ===== */

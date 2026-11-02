@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="'Segoe UI','IBM Plex Sans Arabic',Tahoma,Arial,sans-serif">
+  <title>مطابقة فواتير الموردين — راجع كل فاتورة إلكترونية على عرض السعر المعتمد</title>
+  <defs>
+    <radialGradient id="g1" cx="85%" cy="-5%" r="70%"><stop offset="0" stop-color="#D6E8FF"/><stop offset="1" stop-color="#D6E8FF" stop-opacity="0"/></radialGradient>
+    <radialGradient id="g2" cx="5%" cy="105%" r="65%"><stop offset="0" stop-color="#E2E8FF"/><stop offset="1" stop-color="#E2E8FF" stop-opacity="0"/></radialGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#1F2D3D" flood-opacity=".12"/></filter>
+  </defs>
+  <rect width="1280" height="640" fill="#F8FAFF"/>
+  <rect width="1280" height="640" fill="url(#g1)"/>
+  <rect width="1280" height="640" fill="url(#g2)"/>
+
+  <!-- النص (يمين) -->
+  <g text-anchor="end">
+    <g transform="translate(1196 92)">
+      <rect x="-46" y="-34" width="46" height="46" rx="12" fill="#1D4ED8"/>
+      <path d="M-34 -24h14l7 7v19h-21z M-21 -24v8h8 M-30 -6l4 4l8 -8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 0)"/>
+      <text x="-60" y="0" font-size="22" fill="#566270" font-weight="600">E-Invoice Validation</text>
+    </g>
+    <text x="1196" y="176" font-size="54" font-weight="700" fill="#15202B">مطابقة فواتير الموردين</text>
+    <text x="1196" y="236" font-size="27" fill="#1E3A8A" font-weight="600">كل فاتورة إلكترونية على عرض السعر المعتمد</text>
+    <text x="1196" y="274" font-size="27" fill="#1E3A8A" font-weight="600">والفرق يتحوّل لإشعار دائن تلقائياً</text>
+    <text x="1196" y="330" font-size="19" fill="#566270">لإدارات المشتريات والحسابات في المطاعم والشركات المصرية</text>
+    <text x="1196" y="358" font-size="19" fill="#566270">يقرأ من منظومة الفاتورة الإلكترونية، ويعمل على جهازك بالكامل</text>
+
+    <g font-size="17" font-weight="600">
+      <g transform="translate(1196 420)"><rect x="-230" y="-26" width="230" height="40" rx="20" fill="#fff" stroke="#E3E9F2"/><text x="-20" y="0" fill="#15202B">فرق السعر والكمية</text><circle cx="-212" cy="-6" r="6" fill="#1D4ED8"/></g>
+      <g transform="translate(950 420)"><rect x="-230" y="-26" width="230" height="40" rx="20" fill="#fff" stroke="#E3E9F2"/><text x="-20" y="0" fill="#15202B">خصم وإضافة لكل مورد</text><circle cx="-212" cy="-6" r="6" fill="#1D4ED8"/></g>
+      <g transform="translate(1196 474)"><rect x="-230" y="-26" width="230" height="40" rx="20" fill="#fff" stroke="#E3E9F2"/><text x="-20" y="0" fill="#15202B">نموذج 41 جاهز</text><circle cx="-212" cy="-6" r="6" fill="#1D4ED8"/></g>
+      <g transform="translate(950 474)"><rect x="-230" y="-26" width="230" height="40" rx="20" fill="#fff" stroke="#E3E9F2"/><text x="-20" y="0" fill="#15202B">بيانات مشفرة على جهازك</text><circle cx="-212" cy="-6" r="6" fill="#1D4ED8"/></g>
+    </g>
+    <text x="1196" y="560" font-size="16" fill="#8A97A6">قراءة فقط من المنظومة · لا يرسل ولا يلغي أي فاتورة · بدون إنترنت إلا للمنظومة</text>
+  </g>
+
+  <!-- لقطة تخيلية من البرنامج (يسار) -->
+  <g transform="translate(64 70)" filter="url(#sh)">
+    <rect width="600" height="500" rx="22" fill="#fff" fill-opacity=".86" stroke="#fff"/>
+  </g>
+  <g transform="translate(64 70)" text-anchor="end" font-size="15">
+    <text x="568" y="48" font-size="19" font-weight="700" fill="#15202B">ظرف مورد الخضار — نوفمبر</text>
+    <g transform="translate(32 26)"><rect width="104" height="30" rx="15" fill="#E7F7EE"/><text direction="rtl" text-anchor="start" x="88" y="20" font-size="13" fill="#0F6E3A" font-weight="600">متحقق منها ✓</text></g>
+    <line x1="32" y1="72" x2="568" y2="72" stroke="#E8EDF4"/>
+    <g fill="#566270" font-size="13" font-weight="600">
+      <text x="568" y="98">الصنف</text><text x="400" y="98">الكمية</text><text x="300" y="98">سعر الفاتورة</text><text x="170" y="98">السعر المعتمد</text>
+    </g>
+    <g fill="#15202B">
+      <text x="568" y="134">طماطم</text><text direction="rtl" text-anchor="start" x="400" y="134">120 كجم</text><text x="300" y="134">18.00</text><text x="170" y="134">18.00</text>
+      <rect x="24" y="148" width="556" height="38" rx="8" fill="#FFF4E6"/>
+      <text x="568" y="173">بطاطس</text><text direction="rtl" text-anchor="start" x="400" y="173">200 كجم</text><text x="300" y="173" fill="#A4500B" font-weight="700">16.50</text><text x="170" y="173" font-weight="700">14.00</text>
+      <text x="568" y="212">بصل</text><text direction="rtl" text-anchor="start" x="400" y="212">90 كجم</text><text x="300" y="212">12.00</text><text x="170" y="212">12.00</text>
+      <rect x="24" y="226" width="556" height="38" rx="8" fill="#FFF4E6"/>
+      <text x="568" y="251">خيار</text><text direction="rtl" text-anchor="start" x="400" y="251" fill="#A4500B" font-weight="700">60 من 75</text><text x="300" y="251">20.00</text><text x="170" y="251">20.00</text>
+    </g>
+    <g transform="translate(32 290)">
+      <rect width="170" height="90" rx="14" fill="#FFF4E6"/>
+      <text x="152" y="32" font-size="13" fill="#7A3B07" font-weight="600">إشعار دائن مستحق</text>
+      <text x="152" y="70" font-size="26" fill="#A4500B" font-weight="700">800.00</text>
+    </g>
+    <g transform="translate(215 290)">
+      <rect width="170" height="90" rx="14" fill="#EEF3FF"/>
+      <text direction="rtl" text-anchor="start" x="152" y="32" font-size="13" fill="#1E3A8A" font-weight="600">خصم وإضافة 1%</text>
+      <text x="152" y="70" font-size="26" fill="#1D4ED8" font-weight="700">72.40</text>
+    </g>
+    <g transform="translate(398 290)">
+      <rect width="170" height="90" rx="14" fill="#1D4ED8"/>
+      <text x="152" y="32" font-size="13" fill="#DCE6FF" font-weight="600">صافي المستحق للمورد</text>
+      <text x="152" y="70" font-size="26" fill="#fff" font-weight="700">7,167.60</text>
+    </g>
+    <g transform="translate(32 404)" font-size="14">
+      <rect width="536" height="62" rx="14" fill="#F4F7FB"/>
+      <text direction="rtl" text-anchor="start" x="512" y="27" fill="#15202B" font-weight="600">السعر المعتمد = الأقل بين سعر الفاتورة وسعر العرض</text>
+      <text x="512" y="49" fill="#566270">والزيادة في السعر أو الكمية تدخل الإشعار الدائن بضريبتها</text>
+    </g>
+  </g>
+</svg>

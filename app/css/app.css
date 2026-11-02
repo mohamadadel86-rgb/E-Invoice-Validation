@@ -244,6 +244,30 @@ table.t tr.clickable:hover td { background: rgba(255, 255, 255, .7); }
 .viz-legend-item:hover { background: rgba(255, 255, 255, .75); }
 .viz-legend-item.dim { opacity: .4; }
 
+/* تذكيرات الراحة: تنبيه زجاجي فوق على اليمين (واحد في المرة) + بطاقة الصلاة القادمة في القائمة */
+.well-box { position: fixed; top: 18px; right: 18px; z-index: 90; width: min(320px, calc(100vw - 36px)); }
+.well { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 16px; background: var(--surface-strong); border: 1px solid var(--edge); box-shadow: var(--shadow-pop); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); animation: well-in .25s ease-out; }
+@keyframes well-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .well { animation: none; } }
+.well .ic { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; background: var(--accent-tint); color: var(--accent); }
+.well .ic.warm { background: var(--warn-tint); color: var(--warn); }
+.well .ic.gray { background: var(--line-soft); color: var(--muted); }
+.well .tt { font-weight: 700; font-size: 15px; }
+.well .ss { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.well .acts { display: flex; gap: 6px; margin-top: 10px; }
+.well .x { background: none; border: 0; color: var(--field); cursor: pointer; padding: 2px; font-size: 18px; line-height: 1; border-radius: 6px; }
+.well .x:hover { color: var(--ink); }
+.nav .well-next { margin: 8px 4px 0; padding: 10px 12px; border-radius: 14px; background: var(--accent-tint); border: 1px solid var(--edge); color: var(--accent-dark); font-size: 13px; }
+.nav .well-next b { font-size: 16px; }
+.sw { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; vertical-align: middle; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.sw span { position: absolute; inset: 0; border-radius: 999px; background: var(--field); transition: background .15s; }
+.sw span::after { content: ""; position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: right .15s; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.sw input:checked + span { background: var(--accent); }
+.sw input:checked + span::after { right: 18px; }
+.sw input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.well-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+
 /* بدون دعم للتغبيش، أو المستخدم طلب تقليل الشفافية: أسطح بيضاء صلبة */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .nav, .card, .stat:not(.warn):not(.good), .auth .box, .modal, .combo-list, .pick-list { background: var(--solid); }
@@ -253,7 +277,7 @@ table.t tr.clickable:hover td { background: rgba(255, 255, 255, .7); }
 }
 
 @media print {
-  .nav, .no-print, .toasts { display: none !important; }
+  .nav, .no-print, .toasts, .well-box { display: none !important; }
   .shell { padding: 0; }
   .main { padding: 0; }
   body { background: #fff; }

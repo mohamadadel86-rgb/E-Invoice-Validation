@@ -12,6 +12,7 @@ const ETA = require('./eta');
 const AIP = require('./aiproxy');
 const { Sessions } = require('./sessions');
 const { parseBackup } = require('./store');
+const Prayer = require('../app/js/prayer'); // نفس قوائم وفحص تذكيرات الراحة في الواجهة
 
 const MAX_FAILS = 4;
 const LOCK_MS = 60000;
@@ -593,6 +594,8 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
     store.data.users = store.data.users.filter((u) => u.id !== id);
     delete pr[id];
     await store.setCol('profiles', pr);
+    const well = store.getCol('wellness', {});
+    if (well[id]) { delete well[id]; await store.setCol('wellness', well); }
     sessions.destroyUser(id, null, 'حذف الحساب');
     await serverActivity(actor, 'users', 'حذف مستخدم', { type: 'user', id, label: rec.username }, `${tp.displayName || ''} · ${tp.role === 'admin' ? 'مدير' : 'مراجع'}`);
   }
@@ -691,6 +694,23 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
 
       if (p === '/api/v2/logout' && m === 'POST') { sessions.destroy(actor.sid, 'تسجيل خروج'); return json(res, 200, { ok: true }, { 'Set-Cookie': clearCookie }); }
       if (p === '/api/v2/me' && m === 'GET') return json(res, 200, { user: publicMe(actor), idleMinutes, logId: sess.logId || null });
+      // تذكيرات الراحة: إعدادات شخصية، كل مستخدم يقرأ ويعدّل إعداداته هو فقط
+      if (p === '/api/v2/me/wellness') {
+        const all = store.getCol('wellness', {});
+        if (m === 'GET') {
+          let value = Prayer.defaults();
+          try { if (all[actor.id]) value = Prayer.clean(all[actor.id]); } catch (e) { /* إعدادات قديمة تالفة: الافتراضي */ }
+          return json(res, 200, { value });
+        }
+        if (m === 'PUT') {
+          const b = parseJSON(await readBody(req, 16 * 1024));
+          const value = Prayer.clean(b && b.value);
+          all[actor.id] = value;
+          await store.setCol('wellness', all);
+          return json(res, 200, { value });
+        }
+        throw new HttpError(405, 'الطريقة غير مدعومة', 'method');
+      }
 
       let mm;
       if ((mm = p.match(/^\/api\/v2\/col\/([a-z]+)$/))) {
