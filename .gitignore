@@ -15,6 +15,10 @@
 !/tools/
 !/tests/
 !/assets/
+# مهارات Claude فقط (بدون إعدادات .claude الأخرى)
+!/.claude/
+/.claude/*
+!/.claude/skills/
 
 # داخل المجلدات المسموحة
 /tools/glass-preview.html
