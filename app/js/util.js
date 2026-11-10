@@ -41,9 +41,10 @@ U.fill = (el, ...kids) => {
 };
 
 U.uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-U.r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-U.fmt = (n) => (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-U.fmtQ = (n) => (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 3 });
+// التقريب والتنسيق من الملف المشترك calc.js (مصدر واحد للواجهة والخادم)
+U.r2 = Calc.r2;
+U.fmt = Calc.fmt;
+U.fmtQ = Calc.fmtQ;
 U.num = (n) => h('span', { class: 'num' }, U.fmt(n));
 
 U.MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];

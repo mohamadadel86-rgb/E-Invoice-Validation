@@ -38,7 +38,8 @@ Activity.table = (list, compact) => h('div', { class: 'table-wrap' }, h('table',
     h('td', { class: 'num small', style: 'white-space:nowrap' }, Settings.fmtDT(e.at)),
     h('td', null, h('strong', null, e.displayName || e.username), h('div', { class: 'sub' }, e.username)),
     compact ? null : h('td', { class: 'small' }, Activity.SECTIONS[e.section] || e.section),
-    h('td', null, h('span', { class: 'chip ' + Activity.chip(e.action) }, e.action)),
+    h('td', null, h('span', { class: 'chip ' + Activity.chip(e.action) }, e.action),
+      e.src === 'server' ? h('div', { class: 'sub', title: 'حدث سجّله الخادم نفسه من الفعل الحقيقي، وليس وصفاً أرسلته الشاشة' }, '✓ من الخادم') : null),
     compact ? null : h('td', { class: 'small' }, Activity.link(e)),
     h('td', { class: 'small', style: 'white-space:pre-line;max-width:520px' }, e.details))) :
     h('tr', null, h('td', { colspan: compact ? 4 : 6, class: 'muted', style: 'text-align:center;padding:20px' }, 'لا يوجد نشاط مسجل')))));
@@ -60,7 +61,14 @@ Activity.view = async () => {
   let fUser = '', fSection = '', fFrom = '', fTo = '', term = '';
   const body = h('div');
   const counts = h('div', { class: 'muted small' });
-  let all = (await DB.call('GET', '/api/v2/activity')).value;
+  const first = await DB.call('GET', '/api/v2/activity');
+  let all = first.value;
+  // الأحداث الأقدم من آخر 10,000 محفوظة في الأرشيف وتُحمَّل عند الطلب
+  const archBtn = first.archived ? h('button', { type: 'button', class: 'btn sm', onClick: async () => {
+    try { all = all.concat((await DB.call('GET', '/api/v2/activity?archive=1')).value); } catch (e) { return U.toast(e.message, 'err'); }
+    archBtn.remove();
+    draw();
+  } }, `عرض الأرشيف (${first.archived} حركة أقدم)`) : null;
   const filtered = async () => {
     const t = U.norm(term);
     return all.filter((e) => {
@@ -89,9 +97,10 @@ Activity.view = async () => {
         h('label', { class: 'row small' }, 'من', h('input', { class: 'input', type: 'date', style: 'width:150px', onChange: (e) => { fFrom = e.target.value; draw(); } })),
         h('label', { class: 'row small' }, 'إلى', h('input', { class: 'input', type: 'date', style: 'width:150px', onChange: (e) => { fTo = e.target.value; draw(); } })),
         h('input', { class: 'input', placeholder: 'بحث (رقم فاتورة، صنف، مورد...)', style: 'width:220px', onInput: (e) => { term = e.target.value; clearTimeout(Activity._t); Activity._t = setTimeout(draw, 250); } }),
+        archBtn,
         h('button', { type: 'button', class: 'btn sm', onClick: async () => Activity.exportExcel(await filtered()) }, 'تصدير Excel'))),
     body,
-    h('div', { class: 'card-body small muted' }, 'السجل يكتبه الخادم بهوية الجلسة الفعلية، ومحفوظ مشفراً ولا يمكن تعديله من داخل البرنامج. يُحتفظ بآخر 10,000 حركة.'));
+    h('div', { class: 'card-body small muted' }, 'السجل يكتبه الخادم بهوية الجلسة الفعلية، ومحفوظ مشفراً ولا يمكن تعديله من داخل البرنامج. علامة "✓ من الخادم" تعني أن الخادم سجّل الحدث بنفسه. الأقدم من آخر 10,000 حركة يُنقل للأرشيف ولا يُحذف.'));
   await draw();
   return wrap;
 };

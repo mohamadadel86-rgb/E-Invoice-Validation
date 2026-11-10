@@ -8,6 +8,13 @@ Envelopes.SRC = { memory: 'من الذاكرة', exact: 'تطابق حرفي', a
 /* ===== الضوابط ===== */
 Envelopes.isClosed = (s, month) => (s.closedMonths || []).includes(month);
 Envelopes.validStatus = (st) => !st || String(st).toLowerCase() === 'valid';
+/* فرق بين إجمالي الفاتورة على المنظومة ومجموع بنودها (خصم إجمالي على الفاتورة مثلاً). صفر = متطابق أو غير معروف */
+Envelopes.totalGap = (inv) => {
+  if (inv.docTotal == null || !Number.isFinite(Number(inv.docTotal))) return 0;
+  const gap = U.r2(inv.total - inv.docTotal);
+  return Math.abs(gap) > Math.max(0.05, 0.005 * inv.lines.length) ? gap : 0;
+};
+Envelopes.gapText = (inv) => `فاتورة ${inv.internalID || '—'}: إجماليها على المنظومة ${U.fmt(inv.docTotal)} ومجموع بنودها ${U.fmt(inv.total)} (فرق ${U.fmt(Envelopes.totalGap(inv))}${inv.extraDiscount ? `، خصم إجمالي ${U.fmt(inv.extraDiscount)}` : ''}) — البرنامج يحسب من البنود، فراجع المبلغ قبل الصرف`;
 Envelopes.wrongBuyer = (inv, s) => !!(inv.receiverId && s.companyTaxId && String(inv.receiverId).trim() !== String(s.companyTaxId).trim());
 
 /* قبل الاعتماد: نتأكد من المنظومة أن كل فاتورة ما زالت "صالحة" (لم يلغها المورد أو يرفضها)، وأنها صادرة للرقم الضريبي لشركتك.
@@ -34,6 +41,7 @@ Envelopes.preApprove = async (env, s) => {
       } else skipped++;
       if (!Envelopes.validStatus(inv.status)) issues.push(`فاتورة ${inv.internalID || '—'}: حالتها على المنظومة "${inv.status}" (ملغاة أو مرفوضة) — لا تُعتمد للصرف`);
       if (Envelopes.wrongBuyer(inv, s)) issues.push(`فاتورة ${inv.internalID || '—'}: صادرة للرقم الضريبي ${inv.receiverId} وليس لرقم شركتك ${company} — لا تُخصم ضريبياً`);
+      if (Envelopes.totalGap(inv)) notes.push(Envelopes.gapText(inv));
     }
   } finally { b.done(); }
   if (!company) notes.push('الرقم الضريبي لشركتك غير مسجل (الإعدادات ← ربط الضرائب)، فلم يتم التأكد أن الفواتير صادرة لشركتك.');
@@ -483,16 +491,21 @@ Envelopes.view = async (id) => {
                 const go = await U.modal({ title: 'تنبيه قبل الاعتماد', body: h('p', { style: 'margin:0;line-height:1.8;white-space:pre-line' }, chk.issues.join('\n') + '\n\nبصلاحية المدير تقدر تعتمد رغم ذلك، ويُسجل ذلك في سجل النشاط.'),
                   actions: [{ label: 'اعتماد رغم ذلك (المدير)', value: true, cls: 'danger' }, { label: 'إلغاء', value: false }] });
                 if (!go) return;
-                await Activity.add('envelopes', 'تخطٍّ بصلاحية المدير', Activity.envTarget(env, s), 'اعتماد رغم: ' + chk.issues.join(' · '));
               }
               if (!await U.confirm(`اعتماد الظرف؟ صافي المستحق للمورد ${U.fmt(c.t.payable)} وطلب إشعار دائن بإجمالي ${U.fmt(c.t.cnTotal)}. سيتم حفظ ربط الأصناف في الذاكرة للمرات القادمة.${chk.checked ? `\n\n✓ تم التحقق من ${chk.checked} فاتورة على منظومة الضرائب.` : ''}${chk.notes.length ? '\n\nتنبيه: ' + chk.notes.join('\n') : ''}`, 'اعتماد')) return;
+              const before = { status: env.status, approvedAt: env.approvedAt, approvedBy: env.approvedBy, etaCheck: env.etaCheck, whtRate: env.whtRate };
               env.etaCheck = { at: new Date().toISOString(), checked: chk.checked, skipped: chk.skipped };
               env.whtRate = Engine.whtRateOf(env, s); // تُثبت نسبة الخصم والإضافة التي اعتُمد بها الظرف
               await Engine.learn(env, quotesById);
               env.status = 'approved'; env.approvedAt = new Date().toISOString(); env.approvedBy = DB.user.username;
+              // الخادم هو الذي يعتمد: يعيد الحساب ويفحص المنظومة بنفسه ويثبّت الأرقام، وقد يرفض
+              try { await save(); } catch (e) {
+                for (const k of Object.keys(before)) { if (before[k] === undefined) delete env[k]; else env[k] = before[k]; }
+                draw();
+                return U.alert('لم يُعتمد الظرف', e.message);
+              }
               await Activity.add('envelopes', 'ملخص اعتماد الظرف', Activity.envTarget(env, s),
                 `${env.invoices.length} فاتورة · إجمالي الفواتير ${U.fmt(c.t.invTotal)} · الإشعار الدائن ${U.fmt(c.t.cnTotal)} · خصم وإضافة ${U.fmt(c.t.wht)} · المستحق ${U.fmt(c.t.payable)}\nالتحقق من المنظومة: ${chk.checked} فاتورة${chk.notes.length ? '\n' + chk.notes.join('\n') : ''}`);
-              await save();
               location.hash = '#/report/' + env.id;
             },
           }, 'اعتماد الظرف') : null,
@@ -578,6 +591,7 @@ Envelopes.invoiceCard = (env, x, s, lock, save, draw, opened, tagLock) => {
   const flags = [
     !Envelopes.validStatus(inv.status) ? h('span', { class: 'chip bad' }, `حالتها على المنظومة: ${inv.status}`) : null,
     Envelopes.wrongBuyer(inv, s) ? h('span', { class: 'chip bad' }, `صادرة لرقم ضريبي آخر (${inv.receiverId})`) : null,
+    Envelopes.totalGap(inv) ? h('span', { class: 'chip warn', title: Envelopes.gapText(inv) }, `إجمالي المنظومة ${U.fmt(inv.docTotal)} ≠ مجموع البنود ${U.fmt(inv.total)}`) : null,
   ];
   if (collapsed) {
     return h('section', { class: 'card inv-bar', 'aria-label': 'فاتورة ' + no },

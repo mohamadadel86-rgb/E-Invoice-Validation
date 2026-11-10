@@ -13,10 +13,16 @@ const AIP = require('./aiproxy');
 const { Sessions } = require('./sessions');
 const { parseBackup } = require('./store');
 const Prayer = require('../app/js/prayer'); // نفس قوائم وفحص تذكيرات الراحة في الواجهة
+const Calc = require('../app/js/calc');     // نفس حسابات الظرف في الواجهة (الخادم يحسب بها عند الاعتماد)
 
 const MAX_FAILS = 4;
 const LOCK_MS = 60000;
 const SECTIONS = ['envelopes', 'quotes', 'users', 'settings'];
+const ACT_MAX = 10000;   // سجل النشاط الحي؛ الأقدم يُنقل للأرشيف ولا يُحذف
+const ACT_MOVE = 2000;
+const ETA_FRESH_MS = 10 * 60000;    // نتيجة تحقق من المنظومة يُعاد استخدامها خلال هذه المدة
+const ETA_MAX_AGE_MS = 20 * 60000;  // أقدم من ذلك لا تُقبل عند الاعتماد
+const ETA_UUID_RE = /^[A-Za-z0-9]{6,64}$/;
 const AI_PROVIDERS = AIP.PROVIDERS;
 
 class HttpError extends Error {
@@ -62,6 +68,7 @@ const defaultSettings = () => ({
   closedMonths: [],     // الشهور المقفلة (تُعدَّل من /api/v2/period للمدير فقط)
   restaurants: [],      // المطاعم/الفروع لتوزيع الاستهلاك [{id, name}]
   suppliers: [],        // سجل الموردين: [{id: الرقم الضريبي, name, whtRate: نسبة الخصم والإضافة أو null = النسبة العامة}]
+  ipLookup: false,      // تسجيل عنوان IP العام في سجل الدخول (يتصل بخدمة خارجية api.ipify.org) — مقفول افتراضياً
 });
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -80,6 +87,9 @@ function mergeSettings(old, inc, opts = {}) {
   const seg = inc.segregation === undefined ? !!o.segregation : inc.segregation;
   if (typeof seg !== 'boolean') bad('إعداد الفصل بين المُعِد والمعتمِد غير صالح');
   out.segregation = seg;
+  const ipl = inc.ipLookup === undefined ? !!o.ipLookup : inc.ipLookup;
+  if (typeof ipl !== 'boolean') bad('إعداد تسجيل عنوان IP غير صالح');
+  out.ipLookup = ipl;
   // الشهور المقفلة لا تتغير عبر حفظ الإعدادات أبداً (حتى لو أرسلها المتصفح)؛ فقط عبر إقفال/فتح الفترة
   // opts.trusted = قراءة القيمة المخزنة نفسها (من الخادم)، وليس طلباً من المتصفح
   const cm = opts.trusted ? inc.closedMonths : o.closedMonths;
@@ -149,7 +159,7 @@ function mergeSettings(old, inc, opts = {}) {
 
 /* see: true (كل الأقسام) أو {ai, eta} حسب صلاحيات المستخدم */
 function sanitizeSettings(s, see) {
-  const out = { whtRate: s.whtRate, idleMinutes: s.idleMinutes, categories: s.categories, segregation: !!s.segregation, closedMonths: s.closedMonths || [], companyTaxId: s.eta.receiverId || '', restaurants: s.restaurants || [], suppliers: s.suppliers || [] };
+  const out = { whtRate: s.whtRate, idleMinutes: s.idleMinutes, categories: s.categories, segregation: !!s.segregation, ipLookup: !!s.ipLookup, closedMonths: s.closedMonths || [], companyTaxId: s.eta.receiverId || '', restaurants: s.restaurants || [], suppliers: s.suppliers || [] };
   const ai = see === true || (see && see.ai), eta = see === true || (see && see.eta);
   if (ai) {
     out.ai = { active: s.ai.active };
@@ -173,11 +183,42 @@ const allowed = (user, spec) => spec === true || (Array.isArray(spec) ? spec.som
 
 // وسم المطعم الفارغ = غير موجود (حتى لا يُعتبر الفرق بين '' و undefined تعديلاً)
 const normInv = (i) => { if (!isObj(i) || i.restaurantId) return i; const x = { ...i }; delete x.restaurantId; return x; };
-const envStrip = (e) => { const c = { ...e }; delete c.updatedAt; delete c.updatedBy; delete c.cn; if (Array.isArray(c.invoices)) c.invoices = c.invoices.map(normInv); return c; };
+/* حقول التجميد يملكها الخادم فقط: لا تدخل في مقارنة المحتوى، ولا يُقبل ما يرسله المتصفح منها */
+const FROZEN_KEYS = ['frozenAt', 'calcV', 'approvedTotals', 'etaCheck'];
+const cmpLine = (l) => { if (!isObj(l) || l.fz === undefined) return l; const x = { ...l }; delete x.fz; return x; };
+const cmpInv = (i) => { const x = normInv(i); return isObj(x) && Array.isArray(x.lines) ? { ...x, lines: x.lines.map(cmpLine) } : x; };
+const envStrip = (e) => { const c = { ...e }; delete c.updatedAt; delete c.updatedBy; delete c.cn; for (const k of FROZEN_KEYS) delete c[k]; if (Array.isArray(c.invoices)) c.invoices = c.invoices.map(cmpInv); return c; };
 // بدون وسم المطعم على الفواتير: توزيع الاستهلاك مسموح تعديله بعد الاعتماد (لا يغيّر أرقام الظرف)
-const tagStrip = (e) => { const c = envStrip(e); c.invoices = (e.invoices || []).map((i) => { const x = { ...i }; delete x.restaurantId; return x; }); return c; };
+const tagStrip = (e) => { const c = envStrip(e); c.invoices = (Array.isArray(c.invoices) ? c.invoices : []).map((i) => { if (!isObj(i)) return i; const x = { ...i }; delete x.restaurantId; return x; }); return c; };
 // المحتوى الذي يُعتبر "إعداداً" للظرف (بدون الحالة والأختام ومتابعة الإشعار الدائن)
 const workStrip = (e) => { const c = envStrip(e); for (const k of ['status', 'approvedAt', 'approvedBy', 'reopenedAt', 'reopenedBy', 'preparers', 'createdAt', 'createdBy']) delete c[k]; return c; };
+
+/* ===== تجميد الظرف المعتمد =====
+ * عند الاعتماد يختم الخادم على كل بند نسخة من صنف عرض السعر المربوط به (line.fz)، ويحسب الإجماليات بنفسه.
+ * بعدها أرقام الظرف لا تعتمد على عرض السعر الحالي، فتعديله أو حذفه لا يغيّر ظرفاً معتمداً. */
+const quoteItem = (quotes, inv, l) => {
+  const q = isObj(inv) ? quotes.get(inv.quoteId) : null;
+  const id = isObj(l) && isObj(l.m) ? l.m.itemId : null;
+  return (isObj(q) && id && Array.isArray(q.items) && q.items.find((i) => isObj(i) && i.id === id)) || null;
+};
+const freezeLine = (quotes, inv, l) => { const it = quoteItem(quotes, inv, l); if (it) l.fz = structuredClone(it); else delete l.fz; };
+const eachLine = (env, fn) => {
+  for (const inv of env.invoices) {
+    if (!isObj(inv) || !Array.isArray(inv.lines)) bad('فاتورة غير صالحة في الظرف');
+    for (const l of inv.lines) { if (!isObj(l)) bad('بند غير صالح في الظرف'); fn(inv, l); }
+  }
+};
+const unfreeze = (env) => {
+  for (const k of ['frozenAt', 'calcV', 'approvedTotals']) delete env[k];
+  for (const inv of env.invoices) if (isObj(inv) && Array.isArray(inv.lines)) for (const l of inv.lines) if (isObj(l)) delete l.fz;
+};
+/* إجماليات ظرف مجمد (status = approved و frozenAt موجود). أي رقم غير صالح يرفض الطلب */
+function frozenTotals(env, settings) {
+  let c;
+  try { c = Calc.calcEnvelope(env, Object.create(null), settings); } catch (e) { bad('بيانات الظرف غير صالحة للحساب'); }
+  for (const k of Calc.TOTAL_KEYS) if (!Number.isFinite(c.t[k])) bad('أرقام الظرف غير صالحة (كمية أو سعر أو ضريبة ليست رقماً)');
+  return c.t;
+}
 
 /* متابعة الإشعار الدائن والسداد: تُعدّل حتى بعد الاعتماد أو إقفال الشهر (لا تغيّر أرقام الظرف نفسها) */
 function checkCn(cn) {
@@ -206,6 +247,43 @@ function checkEnvelopes(user, oldList, incoming, ctx = {}) {
   const overrides = [];
   const label = (e) => ({ type: 'envelope', id: e.id, label: `${e.supplier || 'ظرف'} — ${e.month || ''}` });
   const override = (e, why) => overrides.push({ section: 'envelopes', action: 'تخطٍّ بصلاحية المدير', target: label(e), details: why });
+  const settings = ctx.settings || defaultSettings();
+  const eta = ctx.eta || { configured: false, company: '', seen: new Map() };
+  let quotesMap = null;
+  const quotes = () => quotesMap || (quotesMap = (typeof ctx.quotes === 'function' ? ctx.quotes() : ctx.quotes) || new Map());
+  const refrozen = new Set(); // أظرف تغيّر تجميدها في هذا الطلب (تُرجع بنودها المجمدة للمتصفح)
+  /* الاعتماد: الخادم يجمّد البنود ويحسب بنفسه ويرفض لو فيه بند معلّق، ويفحص حالة الفواتير على المنظومة */
+  const approveNow = (inc) => {
+    eachLine(inc, (inv, l) => freezeLine(quotes(), inv, l));
+    inc.frozenAt = now; inc.calcV = Calc.VERSION;
+    inc.whtRate = Calc.rateForSupplier(Calc.supplierId(inc), settings);
+    const t = frozenTotals(inc, settings);
+    if (t.pending) bad(`لا يمكن الاعتماد: ${t.pending} بند يحتاج قراراً (تأكيد ربط أو صنف غير موجود بعرض السعر)`, 'pending');
+    inc.approvedTotals = t;
+    const issues = [];
+    let checked = 0, skipped = 0;
+    for (const inv of inc.invoices) {
+      if (eta.configured && typeof inv.uuid === 'string' && inv.uuid) {
+        const seen = eta.seen.get(inv.uuid);
+        if (!seen || Date.now() - seen.at > ETA_MAX_AGE_MS) throw new HttpError(409, 'لم يكتمل التحقق من الفواتير على منظومة الضرائب. أعد المحاولة.', 'eta-recheck');
+        if (seen.ok) {
+          if (seen.status) inv.status = seen.status;
+          if (seen.receiverId) inv.receiverId = seen.receiverId;
+          inv.etaCheckedAt = new Date(seen.at).toISOString();
+          checked++;
+        } else skipped++;
+      } else skipped++;
+      const no = inv.internalID || '—';
+      if (inv.status && String(inv.status).toLowerCase() !== 'valid') issues.push(`فاتورة ${no}: حالتها على المنظومة "${inv.status}" (ملغاة أو مرفوضة)`);
+      if (inv.receiverId && eta.company && String(inv.receiverId).trim() !== eta.company) issues.push(`فاتورة ${no}: صادرة للرقم الضريبي ${inv.receiverId} وليس لرقم الشركة ${eta.company}`);
+    }
+    if (issues.length) {
+      if (!admin) deny('لا يمكن اعتماد الظرف:\n' + issues.join('\n'));
+      override(inc, 'اعتماد رغم: ' + issues.join(' · '));
+    }
+    inc.etaCheck = { at: now, checked, skipped };
+    refrozen.add(inc.id);
+  };
   for (const inc of incoming) {
     if (!isObj(inc) || !str(inc.id, 64, 1) || ids.has(inc.id)) bad('ظرف غير صالح أو مكرر');
     if (inc.status !== 'draft' && inc.status !== 'approved') bad('حالة ظرف غير معروفة');
@@ -214,6 +292,9 @@ function checkEnvelopes(user, oldList, incoming, ctx = {}) {
     for (const i of inc.invoices) if (isObj(i) && i.restaurantId != null && i.restaurantId !== '' && !str(String(i.restaurantId), 64)) bad('مطعم الفاتورة غير صالح');
     ids.add(inc.id);
     const o = oldMap.get(inc.id);
+    // صيغة الشهر تُفحص للظرف الجديد أو عند تغيير الشهر (وإلا يفلت من إقفال الفترة بصيغة مثل 2026-9)
+    if ((!o || o.month !== inc.month) && !MONTH_RE.test(String(inc.month))) bad('شهر الظرف غير صالح');
+    if (inc.status !== 'approved') unfreeze(inc); // حقول التجميد للخادم فقط
     // قائمة من شارك في الإعداد يحددها الخادم فقط
     inc.preparers = o && Array.isArray(o.preparers) ? [...o.preparers] : [];
     const cnChanged = stable((o && o.cn) || null) !== stable(inc.cn || null);
@@ -229,6 +310,7 @@ function checkEnvelopes(user, oldList, incoming, ctx = {}) {
         if (!user.can('approve')) deny('اعتماد الظرف يحتاج صلاحية الاعتماد');
         if (ctx.segregation) { if (!admin) deny('الفصل بين المُعِد والمعتمِد مفعّل: لا يمكن إنشاء ظرف معتمد مباشرة'); override(inc, 'إنشاء ظرف معتمد مباشرة رغم الفصل بين المُعِد والمعتمِد'); }
         inc.approvedBy = user.username; inc.approvedAt = now;
+        approveNow(inc);
       }
       out.push(inc);
       continue;
@@ -247,13 +329,29 @@ function checkEnvelopes(user, oldList, incoming, ctx = {}) {
         if (!user.can('approve')) deny('إعادة فتح ظرف معتمد تحتاج صلاحية الاعتماد');
         inc.reopenedBy = user.username; inc.reopenedAt = now;
         inc.updatedBy = user.username; inc.updatedAt = now;
+        refrozen.add(inc.id);
         out.push(inc);
       } else {
         if (contentChanged && stable(tagStrip(o)) !== stable(tagStrip({ ...inc, preparers: o.preparers || [] }))) {
           if (!admin) deny('الظرف المعتمد مقفول ولا يمكن تعديله');
           // المدير يعدّل الظرف المعتمد مباشرة (بدون إعادة فتح)، ويبقى معتمداً بنفس المعتمِد الأصلي
           override(inc, 'تعديل محتوى ظرف معتمد بدون إعادة فتحه');
-          out.push({ ...inc, approvedBy: o.approvedBy, approvedAt: o.approvedAt, createdBy: o.createdBy, createdAt: o.createdAt, updatedBy: user.username, updatedAt: now });
+          const edited = { ...inc, approvedBy: o.approvedBy, approvedAt: o.approvedAt, createdBy: o.createdBy, createdAt: o.createdAt, updatedBy: user.username, updatedAt: now };
+          // الظرف يبقى مجمداً: البنود التي لم يتغير ربطها تحتفظ بنسختها، والباقي يُجمَّد من عرض السعر الحالي. النسبة والتقريب كما اعتُمد
+          const oldInv = new Map((o.invoices || []).filter(isObj).map((i) => [i.id, i]));
+          eachLine(edited, (inv, l) => {
+            const oi = oldInv.get(inv.id);
+            const ol = oi && Array.isArray(oi.lines) ? oi.lines.find((x) => isObj(x) && x.n === l.n) : null;
+            if (o.frozenAt && ol && isObj(ol.m) && isObj(l.m) && ol.m.itemId === l.m.itemId) { if (ol.fz) l.fz = ol.fz; else delete l.fz; }
+            else freezeLine(quotes(), inv, l);
+          });
+          edited.frozenAt = o.frozenAt || now;
+          if (o.calcV != null) edited.calcV = o.calcV; else delete edited.calcV;
+          edited.whtRate = o.whtRate != null ? o.whtRate : Calc.whtRateOf(o, settings);
+          if (o.etaCheck !== undefined) edited.etaCheck = o.etaCheck; else delete edited.etaCheck;
+          edited.approvedTotals = frozenTotals(edited, settings);
+          refrozen.add(edited.id);
+          out.push(edited);
           continue;
         }
         // المسموح فقط: متابعة الإشعار الدائن ووسم المطعم على كل فاتورة
@@ -271,6 +369,7 @@ function checkEnvelopes(user, oldList, incoming, ctx = {}) {
         override(inc, 'اعتماد ظرف شارك المدير في إعداده (تخطي الفصل بين المُعِد والمعتمِد)');
       }
       inc.approvedBy = user.username; inc.approvedAt = now;
+      approveNow(inc);
     } else if (stable(workStrip(o)) !== stable(workStrip(inc)) && !inc.preparers.includes(user.username)) {
       inc.preparers.push(user.username);
     }
@@ -284,7 +383,7 @@ function checkEnvelopes(user, oldList, incoming, ctx = {}) {
     if (e.status === 'approved' && !admin) deny('حذف ظرف معتمد للمدير فقط');
     if (e.status !== 'approved' && !user.can('envDelete')) deny('حذف الأظرف يحتاج صلاحية "حذف الأظرف قيد المراجعة"');
   }
-  return { out, removed, overrides };
+  return { out, removed, overrides, refrozen };
 }
 
 /* عروض الأسعار في الشهور المقفلة لا تتغير */
@@ -358,6 +457,8 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
   try { const md = JSON.parse(fs.readFileSync(MIRROR_FILE, 'utf8')).dir; if (md && path.isAbsolute(md)) store.mirrorDir = md; } catch (e) { /* غير مُعد */ }
   const testIdle = Number(process.env.EINVOICE_TEST_IDLE_MS) || 0;
   let idleMinutes = 30;
+  let ipLookup = false; // من الإعدادات (مقفول افتراضياً)
+  const etaSeen = new Map(); // uuid -> {ok, status, receiverId, at}: ما رآه الخادم نفسه من المنظومة
   let settingUp = false;
   const aiRate = new Map();
 
@@ -388,7 +489,7 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
   function logEntry(req, extra) {
     const e = { id: uid(), deviceId: DEVICE_ID, deviceLabel: HOST, ip: '', ...deviceInfo(req), screen: '', ...extra };
     store.appendLog(e);
-    publicIp().then((ip) => { if (ip) store.updateLog(e.id, { ip }); });
+    if (ipLookup) publicIp().then((ip) => { if (ip) store.updateLog(e.id, { ip }); });
     return e.id;
   }
 
@@ -414,17 +515,83 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
     if (!s) return defaultSettings();
     try { return mergeSettings(defaultSettings(), s, { trusted: true }); } catch (e) { return defaultSettings(); }
   };
-  function refreshIdle() { try { idleMinutes = readSettings().idleMinutes || 30; } catch (e) { /* */ } }
+  function refreshIdle() { try { const s = readSettings(); idleMinutes = s.idleMinutes || 30; ipLookup = !!s.ipLookup; } catch (e) { /* */ } }
 
   /* سجل النشاط الذي يكتبه الخادم بنفسه (لا يمكن للمتصفح تزويره أو إغفاله) */
-  async function serverActivity(user, section, action, target, details) {
+  /* src: 'server' = حدث ولّده الخادم من فعل حقيقي (اعتماد، إقفال، تخطٍّ...)، 'client' = وصف أرسلته الواجهة */
+  async function serverActivity(user, section, action, target, details, src) {
     const list = store.getCol('activity', []);
     list.push({
       id: uid(), at: Date.now(), userId: user.id, username: user.username, displayName: user.displayName,
       section, action, targetType: target ? target.type : '', targetId: target ? target.id : '', targetLabel: target ? target.label : '', details: details || '',
+      src: src === 'client' ? 'client' : 'server',
     });
-    if (list.length > 10000) list.splice(0, list.length - 10000);
-    await store.setCol('activity', list);
+    // الأقدم يُنقل للأرشيف (مشفراً) ولا يُحذف. الكتابتان تُسجلان في الذاكرة قبل أي انتظار حتى لا يتداخل حدث آخر بينهما
+    let moved = null;
+    if (list.length > ACT_MAX) {
+      const arch = store.getCol('activityold', []);
+      arch.push(...list.splice(0, ACT_MOVE));
+      moved = store.setCol('activityold', arch);
+    }
+    const saved = store.setCol('activity', list);
+    if (moved) await moved;
+    await saved;
+  }
+
+  /* ترقية: الأظرف المعتمدة قبل 2.6 تُجمَّد بأرقامها الحالية (نفس عرض السعر ونفس التقريب القديم)، مرة واحدة */
+  function freezeLegacy() {
+    const envs = store.getCol('envelopes', null);
+    if (!Array.isArray(envs) || !envs.some((e) => isObj(e) && e.status === 'approved' && !e.frozenAt)) return 0;
+    const quotes = new Map(store.getCol('quotes', []).filter(isObj).map((q) => [q.id, q]));
+    const settings = readSettings();
+    const now = iso();
+    let n = 0;
+    for (const e of envs) {
+      if (!isObj(e) || e.status !== 'approved' || e.frozenAt || !Array.isArray(e.invoices)) continue;
+      for (const inv of e.invoices) if (isObj(inv) && Array.isArray(inv.lines)) for (const l of inv.lines) if (isObj(l)) freezeLine(quotes, inv, l);
+      if (e.whtRate == null) e.whtRate = Calc.rateForSupplier(Calc.supplierId(e), settings);
+      e.frozenAt = now;
+      try {
+        const c = Calc.calcEnvelope(e, Object.create(null), settings);
+        if (Calc.TOTAL_KEYS.every((k) => Number.isFinite(c.t[k]))) e.approvedTotals = c.t;
+      } catch (err) { /* ظرف قديم بشكل غير متوقع: يُجمَّد بدون إجماليات محفوظة */ }
+      n++;
+    }
+    store.setCol('envelopes', envs).catch((err) => console.error('freeze', err.message));
+    return n;
+  }
+
+  /* ما رآه الخادم من المنظومة عن مستند (من طلبات الواجهة عبر الوسيط، أو من فحصه هو قبل الاعتماد) */
+  function recordEta(uuid, body) {
+    let receiverId = body.receiverId || (isObj(body.receiver) && body.receiver.id);
+    if (!receiverId && typeof body.document === 'string') { try { const d = JSON.parse(body.document); receiverId = d && d.receiver && d.receiver.id; } catch (e) { /* */ } }
+    etaSeen.set(uuid, { ok: true, status: String(body.status || '').slice(0, 40), receiverId: String(receiverId || '').slice(0, 40), at: Date.now() });
+    if (etaSeen.size > 5000) for (const [k, v] of etaSeen) if (Date.now() - v.at > ETA_MAX_AGE_MS) etaSeen.delete(k);
+  }
+  /* قبل حفظ أظرف فيها اعتماد جديد: الخادم يتأكد بنفسه من حالة فواتيرها على المنظومة (ما لم يكن رآها للتو) */
+  async function etaPrefetch(value) {
+    if (!Array.isArray(value)) return;
+    const e = readSettings().eta;
+    if (!e.clientId || !e.clientSecret) return;
+    const old = new Map(store.getCol('envelopes', []).map((x) => [x.id, x]));
+    const uuids = new Set();
+    for (const inc of value) {
+      if (!isObj(inc) || inc.status !== 'approved' || !Array.isArray(inc.invoices)) continue;
+      const o = old.get(inc.id);
+      if (o && o.status === 'approved') continue;
+      for (const inv of inc.invoices) if (isObj(inv) && typeof inv.uuid === 'string' && inv.uuid) uuids.add(inv.uuid);
+    }
+    let calls = 0;
+    for (const u of uuids) {
+      const c = etaSeen.get(u);
+      if (c && Date.now() - c.at < (c.ok ? ETA_FRESH_MS : 60000)) continue;
+      if (!ETA_UUID_RE.test(u)) { etaSeen.set(u, { ok: false, at: Date.now() }); continue; }
+      if (calls++) await new Promise((r) => setTimeout(r, 250));
+      try {
+        const r = await ETA.etaRequest({ env: e.env, clientId: e.clientId, clientSecret: e.clientSecret, path: `/api/v1.0/documents/${u}/details`, query: {} });
+        if (r.status === 200 && isObj(r.body)) recordEta(u, r.body); else etaSeen.set(u, { ok: false, at: Date.now() });
+      } catch (err) { etaSeen.set(u, { ok: false, at: Date.now() }); }
+    }
   }
 
   /* ===== الدخول والإعداد ===== */
@@ -491,7 +658,12 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
     refreshIdle();
     const sess = sessions.create(rec, { weakPassword: !!P.passwordIssue(body.password) });
     sess.logId = logEntry(req, { type: 'session', userId: rec.id, username: rec.username, displayName: p.displayName || rec.username, role: p.role, at: Date.now(), lastSeen: Date.now(), end: null, endReason: null });
-    return json(res, 200, { user: publicMe(userFor(sess)) }, { 'Set-Cookie': cookieOf(sess.id) });
+    const me = userFor(sess);
+    try {
+      const n = freezeLegacy();
+      if (n) await serverActivity(me, 'envelopes', 'ترقية: تثبيت أرقام الأظرف المعتمدة', null, `${n} ظرف معتمد قبل الإصدار 2.6 ثُبتت أرقامه كما هي، فلا يغيّرها تعديل عروض الأسعار بعد الآن`);
+    } catch (err) { console.error('freeze', err.message); }
+    return json(res, 200, { user: publicMe(me) }, { 'Set-Cookie': cookieOf(sess.id) });
   }
 
   /* ===== المستخدمون ===== */
@@ -520,6 +692,8 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
     if (store.findUser(username)) throw new HttpError(409, 'اسم المستخدم موجود بالفعل', 'duplicate');
     const id = uid();
     const wrap = await C.wrapMaster(body.password, store.master);
+    // بعد الانتظار: طلب آخر في نفس اللحظة قد يكون أضاف نفس الاسم
+    if (store.findUser(username)) throw new HttpError(409, 'اسم المستخدم موجود بالفعل', 'duplicate');
     store.data.users.push({ id, username, wrap, createdAt: iso() });
     const pr = profilesOf();
     pr[id] = { displayName: display, role: body.role, perms };
@@ -543,19 +717,25 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
     }
     checkRolePerms(actor, body.role, perms);
     if (tp.role === 'admin' && body.role !== 'admin' && adminCount() <= 1) deny('لا يمكن إزالة آخر مدير للنظام');
+    const wantsPw = body.password !== undefined && body.password !== null && body.password !== '';
+    // كلمة مرورك أنت تتغير من "حسابي" فقط، لأنها تحتاج كلمة المرور الحالية
+    if (wantsPw && isSelf) bad('لتغيير كلمة مرورك استخدم "حسابي ← تغيير كلمة المرور"', 'use-change-password');
     const display = String(body.displayName || '').trim() || rec.username;
     if (!str(display, 100)) bad('الاسم الظاهر طويل');
     const notes = [];
     if (permsText(tp.role, P.cleanPerms(tp.perms)) !== permsText(body.role, perms)) notes.push(`الصلاحيات من [${permsText(tp.role, P.cleanPerms(tp.perms))}] إلى [${permsText(body.role, perms)}]`);
     if ((tp.displayName || '') !== display) notes.push(`الاسم من «${tp.displayName || ''}» إلى «${display}»`);
-    if (body.password !== undefined && body.password !== null && body.password !== '') {
+    if (wantsPw) {
       const pIssue = P.passwordIssue(body.password); if (pIssue) bad(pIssue, 'weak-password');
       rec.wrap = await C.wrapMaster(body.password, store.master);
-      sessions.destroyUser(id, isSelf ? actor.sid : null, 'تغيير كلمة المرور');
+      sessions.destroyUser(id, null, 'تغيير كلمة المرور');
       notes.push('تم تعيين كلمة مرور جديدة');
     }
-    pr[id] = { displayName: display, role: body.role, perms };
-    await store.setCol('profiles', pr);
+    // نقرأ الملفات الشخصية من جديد بعد الانتظار: قد يكون طلب آخر عدّلها في الأثناء
+    const fresh = profilesOf();
+    if (!store.findUserById(id)) throw new HttpError(404, 'المستخدم غير موجود', 'not-found');
+    fresh[id] = { displayName: display, role: body.role, perms };
+    await store.setCol('profiles', fresh);
     await serverActivity(actor, 'users', 'تعديل مستخدم', { type: 'user', id, label: rec.username }, notes.join('\n') || 'بدون تغيير');
   }
 
@@ -616,29 +796,37 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
     if (!vatFillOnly && !allowed(actor, spec.put)) deny();
     const body = parseJSON(await readBody(req, spec.limit));
     if (!isObj(body) || !('value' in body)) bad('الجسم يجب أن يحتوي value');
+    if (name === 'envelopes') await etaPrefetch(body.value); // قبل فحص النسخة: لا انتظار بعده حتى الحفظ
     const ifMatch = req.headers['if-match'];
     if (ifMatch !== undefined && ifMatch.replace(/"/g, '') !== String(store.rev(name))) throw new HttpError(409, 'تم تعديل هذه البيانات من مكان آخر، أعد التحميل', 'conflict', { rev: store.rev(name) });
     let value = body.value;
     const events = [];
+    let refrozen = new Set();
     if (name === 'settings') {
       const old = readSettings();
       // المتصفح لا يرى أقسام الإعدادات التي ليست من صلاحيته، فلا يرسلها؛ ولو أرسلها تُتجاهل
       if (isObj(value)) { if (!actor.can('settingsAi')) delete value.ai; if (!actor.can('settingsEta')) delete value.eta; }
       value = mergeSettings(old, value);
-      const changedGeneral = ['whtRate', 'idleMinutes', 'categories', 'segregation', 'restaurants', 'suppliers'].some((k) => stable(old[k]) !== stable(value[k]));
+      const changedGeneral = ['whtRate', 'idleMinutes', 'categories', 'segregation', 'ipLookup', 'restaurants', 'suppliers'].some((k) => stable(old[k]) !== stable(value[k]));
       if (changedGeneral && !actor.can('settingsGeneral')) deny('تعديل الإعدادات العامة يحتاج صلاحية "أنواع التوريد والمطاعم والإعدادات العامة"');
       for (const p of AI_PROVIDERS) if (old.ai[p].key !== value.ai[p].key) events.push(value.ai[p].key ? `تم تغيير مفتاح ${p}` : `تم حذف مفتاح ${p}`);
       if (old.eta.clientSecret !== value.eta.clientSecret) events.push(value.eta.clientSecret ? 'تم تغيير Client Secret الضرائب' : 'تم حذف Client Secret الضرائب');
       if (old.eta.clientId !== value.eta.clientId || old.eta.env !== value.eta.env) events.push('تعديل بيانات ربط الضرائب');
       if (old.whtRate !== value.whtRate || old.idleMinutes !== value.idleMinutes || stable(old.categories) !== stable(value.categories)) events.push('تعديل الإعدادات العامة');
+      if (old.ipLookup !== value.ipLookup) events.push(value.ipLookup ? 'تفعيل تسجيل عنوان IP العام في سجل الدخول' : 'إيقاف تسجيل عنوان IP العام في سجل الدخول');
     } else if (name === 'quotes') {
       checkQuotes(value);
       events.push(...checkClosedQuotes(store.getCol('quotes', []), value, new Set(readSettings().closedMonths), actor.isAdmin));
       if (vatFillOnly && !onlyVatFill(store.getCol('quotes', []), value)) deny('تعديل عروض الأسعار يحتاج صلاحية العروض');
     } else if (name === 'envelopes') {
       const st = readSettings();
-      const chk = checkEnvelopes(actor, store.getCol('envelopes', []), value, { segregation: !!st.segregation, closed: new Set(st.closedMonths) });
+      const chk = checkEnvelopes(actor, store.getCol('envelopes', []), value, {
+        segregation: !!st.segregation, closed: new Set(st.closedMonths), settings: st,
+        quotes: () => new Map(store.getCol('quotes', []).filter(isObj).map((q) => [q.id, q])),
+        eta: { configured: !!(st.eta.clientId && st.eta.clientSecret), company: String(st.eta.receiverId || '').trim(), seen: etaSeen },
+      });
       value = chk.out;
+      refrozen = chk.refrozen;
       events.push(...chk.overrides);
       const old = new Map(store.getCol('envelopes', []).map((e) => [e.id, e]));
       for (const e of value) {
@@ -666,7 +854,12 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
       else await serverActivity(actor, ev.section, ev.action, ev.target, ev.details);
     }
     // الأظرف: نرجّع ما يختمه الخادم (المُعدّون/المعتمِد/آخر تعديل) لتتحدث الشاشة بدون إعادة تحميل
-    const stamps = name === 'envelopes' ? Object.fromEntries(value.map((e) => [e.id, { preparers: e.preparers || [], createdBy: e.createdBy, createdAt: e.createdAt, updatedBy: e.updatedBy, updatedAt: e.updatedAt, approvedBy: e.approvedBy, approvedAt: e.approvedAt, reopenedBy: e.reopenedBy, reopenedAt: e.reopenedAt, cn: e.cn }])) : undefined;
+    const stamps = name === 'envelopes' ? Object.fromEntries(value.map((e) => [e.id, {
+      preparers: e.preparers || [], createdBy: e.createdBy, createdAt: e.createdAt, updatedBy: e.updatedBy, updatedAt: e.updatedAt, approvedBy: e.approvedBy, approvedAt: e.approvedAt, reopenedBy: e.reopenedBy, reopenedAt: e.reopenedAt, cn: e.cn,
+      frozenAt: e.frozenAt || null, calcV: e.calcV || null, approvedTotals: e.approvedTotals || null, whtRate: e.whtRate, etaCheck: e.etaCheck,
+      // البنود المجمدة تُرجع فقط للأظرف التي تغيّر تجميدها في هذا الطلب: {معرّف الفاتورة: {رقم البند: الصنف المجمد أو null}}
+      fz: refrozen.has(e.id) ? Object.fromEntries(e.invoices.filter(isObj).map((inv) => [inv.id, Object.fromEntries((Array.isArray(inv.lines) ? inv.lines : []).filter(isObj).map((l) => [l.n, l.fz || null]))])) : undefined,
+    }])) : undefined;
     return json(res, 200, { rev: store.rev(name), stamps }, { ETag: `"${store.rev(name)}"` });
   }
 
@@ -696,8 +889,8 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
       if (p === '/api/v2/me' && m === 'GET') return json(res, 200, { user: publicMe(actor), idleMinutes, logId: sess.logId || null });
       // تذكيرات الراحة: إعدادات شخصية، كل مستخدم يقرأ ويعدّل إعداداته هو فقط
       if (p === '/api/v2/me/wellness') {
-        const all = store.getCol('wellness', {});
         if (m === 'GET') {
+          const all = store.getCol('wellness', {});
           let value = Prayer.defaults();
           try { if (all[actor.id]) value = Prayer.clean(all[actor.id]); } catch (e) { /* إعدادات قديمة تالفة: الافتراضي */ }
           return json(res, 200, { value });
@@ -705,6 +898,7 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
         if (m === 'PUT') {
           const b = parseJSON(await readBody(req, 16 * 1024));
           const value = Prayer.clean(b && b.value);
+          const all = store.getCol('wellness', {}); // بعد قراءة الطلب: لا انتظار بين القراءة والكتابة
           all[actor.id] = value;
           await store.setCol('wellness', all);
           return json(res, 200, { value });
@@ -743,10 +937,13 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
           if (target) {
             if (!['logs', 'envelopes', 'quotes', 'cn', 'reports'].some((k) => actor.can(k))) deny();
             if (!str(target, 100, 1)) bad('هدف غير صالح');
-            return json(res, 200, { value: store.getCol('activity', []).filter((a) => a.targetId === target) });
+            // سجل هدف واحد لغير صاحب صلاحية السجلات: أظرف وعروض فقط (لا سجل المستخدمين ولا الإعدادات)
+            const all = actor.can('logs');
+            return json(res, 200, { value: store.getCol('activity', []).concat(store.getCol('activityold', [])).filter((a) => a.targetId === target && (all || a.targetType === 'envelope' || a.targetType === 'quote')) });
           }
           if (!actor.can('logs')) deny();
-          return json(res, 200, { value: store.getCol('activity', []) });
+          if (new URL(req.url, 'http://x').searchParams.get('archive') === '1') return json(res, 200, { value: store.getCol('activityold', []) });
+          return json(res, 200, { value: store.getCol('activity', []), archived: store.getCol('activityold', []).length });
         }
         if (m === 'POST') {
           const b = parseJSON(await readBody(req, 32 * 1024));
@@ -754,7 +951,7 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
           const t = isObj(b.target) ? b.target : null;
           if (t && (!str(t.type || '', 50) || !str(t.id || '', 100) || !str(t.label || '', 300))) bad('هدف السجل غير صالح');
           // الهوية والوقت من الجلسة على الخادم، ويتجاهل ما يرسله المتصفح
-          await serverActivity(actor, b.section, b.action, t ? { type: t.type || '', id: t.id || '', label: t.label || '' } : null, b.details || '');
+          await serverActivity(actor, b.section, b.action, t ? { type: t.type || '', id: t.id || '', label: t.label || '' } : null, b.details || '', 'client');
           return json(res, 200, { ok: true });
         }
       }
@@ -876,14 +1073,15 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
         const b = parseJSON(await readBody(req, 40 * 1024 * 1024));
         if (!isObj(b)) bad('طلب غير صالح');
         const images = AIP.checkInput(b);
-        const r = aiRate.get(actor.sid) || { n: 0, reset: Date.now() + 10 * 60000 };
+        const r = aiRate.get(actor.id) || { n: 0, reset: Date.now() + 10 * 60000 }; // لكل مستخدم (لا يتصفّر بإعادة الدخول)
         if (Date.now() > r.reset) { r.n = 0; r.reset = Date.now() + 10 * 60000; }
         if (++r.n > 120) throw new HttpError(429, 'عدد طلبات الذكاء الاصطناعي كبير، حاول بعد قليل', 'rate-limit');
-        aiRate.set(actor.sid, r);
+        aiRate.set(actor.id, r);
         const s = readSettings();
         const key = s.ai[b.provider].key;
         if (!key) return json(res, 200, { ok: false, status: 400, message: 'لم يتم إدخال مفتاح API لهذا النموذج — من الإعدادات' });
-        const model = b.model || s.ai[b.provider].model;
+        // اسم النموذج من الإعدادات؛ اختيار نموذج آخر في الطلب لصاحب صلاحية إعدادات الذكاء الاصطناعي فقط (اختبار الاتصال)
+        const model = (actor.can('settingsAi') && b.model) || s.ai[b.provider].model;
         return json(res, 200, await AIP.callProvider({ provider: b.provider, key, model, system: b.system, prompt: b.prompt, images }));
       }
 
@@ -900,7 +1098,10 @@ function createApi2({ store, dataDir, json, readBody, version, openFolder }) {
         if (!e.clientId || !e.clientSecret) throw new HttpError(400, 'أدخل Client ID و Client Secret من الإعدادات', 'eta-not-configured');
         try {
           if (test) { await ETA.etaToken(e.env, e.clientId, e.clientSecret, true); return json(res, 200, { ok: true }); }
-          return json(res, 200, await ETA.etaRequest({ env: e.env, clientId: e.clientId, clientSecret: e.clientSecret, path: b.path, query: b.query }));
+          const r = await ETA.etaRequest({ env: e.env, clientId: e.clientId, clientSecret: e.clientSecret, path: b.path, query: b.query });
+          const doc = /^\/api\/v1(?:\.0)?\/documents\/([A-Za-z0-9]{6,64})\/(?:details|raw)$/.exec(String(b.path));
+          if (doc && r.status === 200 && isObj(r.body)) recordEta(doc[1], r.body);
+          return json(res, 200, r);
         } catch (err) {
           if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|aborted|timeout/i.test(String(err.message) + String(err.cause && err.cause.code))) throw err;
           return json(res, 200, { ok: false, status: err.status || 500, message: err.message });

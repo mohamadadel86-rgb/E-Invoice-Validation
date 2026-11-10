@@ -16,98 +16,13 @@ Engine.quotesFor = async (month, category) => {
 };
 Engine.coversMonth = (q) => q.from <= U.monthFirst(q.month) && q.to >= U.monthLast(q.month);
 
-/* ===== حساب بند واحد ===== */
-Engine.calcLine = (line, quote, settings) => {
-  const item = line.m && line.m.itemId && quote ? quote.items.find((i) => i.id === line.m.itemId) : null;
-  const factor = item ? (Number(line.m.factor) || 1) : 1;
-  const quotePrice = item && item.price != null && item.price !== '' ? Number(item.price) : null;
-  const expected = quotePrice != null && quotePrice > 0 ? quotePrice * factor : null;
-  const P = line.price;
-  // اعتماد يدوي من إدارة المشتريات لصنف غير موجود بعرض السعر
-  const manual = !item && line.manualApproval ? line.manualApproval : null;
-  const manualPrice = manual && Number(manual.price) > 0 ? Number(manual.price) : null;
-  let approvedPrice;
-  if (line.rejected) approvedPrice = 0;
-  else if (expected != null) approvedPrice = Math.min(P, expected); // السعر الأقل من العرض لا يُحاسب عليه
-  else if (manualPrice != null) approvedPrice = Math.min(P, manualPrice);
-  else approvedPrice = P;
-  const received = line.received == null ? line.qty : Math.min(line.qty, Math.max(0, Number(line.received) || 0));
-  const quoteVat = item && item.vat != null ? Number(item.vat) : null;
-  const vatRate = line.vatOverride != null ? Number(line.vatOverride) : (quoteVat != null ? quoteVat : line.vatRate);
-  const actualNet = line.rejected ? 0 : U.r2(received * approvedPrice);
-  const actualVatCalc = U.r2(actualNet * vatRate / 100);
-  const cnNet = Math.max(0, U.r2(line.netTotal - actualNet));
-  const cnVat = Math.max(0, U.r2(line.vatAmount - actualVatCalc));
-  const finalNet = U.r2(line.netTotal - cnNet);
-  const finalVat = U.r2(line.vatAmount - cnVat);
-
-  const reasons = [];
-  if (line.rejected) reasons.push(item ? 'صنف مرفوض بالكامل' : 'صنف غير موجود بعرض السعر — مرفوض');
-  else {
-    if (received < line.qty) reasons.push(`فرق كمية: الفاتورة ${U.fmtQ(line.qty)} والمستلم ${U.fmtQ(received)}`);
-    if (expected != null && P > expected + 0.005) reasons.push(`فرق سعر: سعر الفاتورة ${U.fmt(P)} وسعر العرض ${U.fmt(expected)} — الفرق ${U.fmt(P - expected)} × ${U.fmtQ(received)} = ${U.fmt((P - expected) * received)}`);
-    if (manualPrice != null && P > manualPrice + 0.005) reasons.push(`فرق سعر: سعر الفاتورة ${U.fmt(P)} والسعر المعتمد يدوياً من المشتريات ${U.fmt(manualPrice)} — الفرق ${U.fmt(P - manualPrice)} × ${U.fmtQ(received)} = ${U.fmt((P - manualPrice) * received)}`);
-  }
-  const vatExpectedOnCn = U.r2(cnNet * line.vatRate / 100);
-  if (cnVat > vatExpectedOnCn + 0.01) reasons.push(`ضريبة قيمة مضافة غير مستحقة (${line.vatRate}% بدلاً من ${vatRate}%)`);
-
-  const notes = [];
-  let status = 'ok';
-  if (!item && !line.rejected && !line.noQuoteAccepted && !manual) { status = 'nomatch'; notes.push('لا يوجد صنف مقابل في عرض السعر'); }
-  else if (item && !line.rejected) {
-    if (quotePrice == null || quotePrice <= 0) notes.push('سعر العرض صفر أو فارغ');
-    if (line.m.note) notes.push(line.m.note);
-    if (!line.confirmed) status = 'review';
-  }
-  if (item && quoteVat == null && line.vatOverride == null) notes.push(`ق.م غير محددة بالعرض: أُخذت ${line.vatRate}% من الفاتورة`);
-
-  return {
-    item, factor, quotePrice, expected, approvedPrice, received, vatRate, manual, manualPrice,
-    actualNet, cnNet, cnVat, cnTotal: U.r2(cnNet + cnVat), finalNet, finalVat,
-    reasons, notes, status,
-  };
-};
-
-Engine.calcInvoice = (inv, quote, settings) => {
-  const rows = inv.lines.map((l) => ({ line: l, c: Engine.calcLine(l, quote, settings) }));
-  const s = (f) => U.r2(rows.reduce((a, r) => a + f(r), 0));
-  const t = {
-    invNet: s((r) => r.line.netTotal),
-    invVat: s((r) => r.line.vatAmount),
-    other: s((r) => r.line.otherTaxes),
-    cnNet: s((r) => r.c.cnNet),
-    cnVat: s((r) => r.c.cnVat),
-    finalNet: s((r) => r.c.finalNet),
-    finalVat: s((r) => r.c.finalVat),
-    pending: rows.filter((r) => r.c.status !== 'ok').length,
-  };
-  t.invTotal = U.r2(t.invNet + t.invVat + t.other);
-  t.cnTotal = U.r2(t.cnNet + t.cnVat);
-  // ضريبة الخصم والإضافة على القيمة الفعلية المعتمدة بعد التعديلات
-  t.wht = U.r2(t.finalNet * (Number(settings.whtRate) || 0) / 100);
-  t.payable = U.r2(t.finalNet + t.finalVat + t.other - t.wht);
-  return { rows, t };
-};
-
-/* نسبة الخصم والإضافة للمورد: من سجل الموردين (الإعدادات) وإلا النسبة العامة.
- * الظرف المعتمد يحتفظ بالنسبة التي اعتُمد بها حتى لا تتغير أرقامه لو تغيّرت النسبة لاحقاً */
-Engine.supplierId = (env) => env.supplierTaxId || ((env.invoices || []).find((i) => i.issuerId) || {}).issuerId || '';
-Engine.rateForSupplier = (id, settings) => {
-  const sp = (settings.suppliers || []).find((x) => x.id === id);
-  return sp && sp.whtRate != null ? Number(sp.whtRate) : (Number(settings.whtRate) || 0);
-};
-Engine.whtRateOf = (env, settings) => (env.status === 'approved' && env.whtRate != null ? Number(env.whtRate) : Engine.rateForSupplier(Engine.supplierId(env), settings));
-
-Engine.calcEnvelope = (env, quotesById, settings) => {
-  const whtRate = Engine.whtRateOf(env, settings);
-  const st = whtRate === Number(settings.whtRate) ? settings : Object.assign({}, settings, { whtRate });
-  const invs = env.invoices.map((inv) => ({ inv, quote: quotesById[inv.quoteId], whtRate, ...Engine.calcInvoice(inv, quotesById[inv.quoteId], st) }))
-    .sort((a, b) => String(a.inv.internalID || '').localeCompare(String(b.inv.internalID || ''), 'en', { numeric: true }));
-  const keys = ['invNet', 'invVat', 'other', 'invTotal', 'cnNet', 'cnVat', 'cnTotal', 'finalNet', 'finalVat', 'wht', 'payable', 'pending'];
-  const t = {};
-  for (const k of keys) t[k] = U.r2(invs.reduce((a, x) => a + x.t[k], 0));
-  return { invs, t, whtRate };
-};
+/* ===== الحسابات: في الملف المشترك calc.js (نفس الكود يحسب به الخادم عند الاعتماد) ===== */
+Engine.calcLine = Calc.calcLine;
+Engine.calcInvoice = Calc.calcInvoice;
+Engine.supplierId = Calc.supplierId;
+Engine.rateForSupplier = Calc.rateForSupplier;
+Engine.whtRateOf = Calc.whtRateOf;
+Engine.calcEnvelope = Calc.calcEnvelope;
 
 /* بحث في أصناف عرض السعر: برقم البند أو بأجزاء الاسم، وبدون نص = الأقرب لاسم صنف الفاتورة */
 Engine.searchItems = (quote, query, hint, n) => {
@@ -178,7 +93,14 @@ Engine.matchInvoice = async (inv, quote, category, { useAI, force, onStatus } = 
       const factor = Number(r.factor) > 0 ? Number(r.factor) : 1;
       const conf = Math.max(0, Math.min(1, Number(r.confidence) || 0));
       l.m = { itemId: r.item_id, factor, conf, src: 'ai', note: (r.note || '').trim() };
-      l.confirmed = conf >= 0.9 && factor === 1 && !l.m.note;
+      // التأكيد التلقائي لا يعتمد على ثقة النموذج وحدها (وصف البند يكتبه المورد وقد يضلل النموذج):
+      // لازم الاسم قريب من صنف العرض أو سعر الفاتورة مطابق لسعره، وإلا يبقى الربط اقتراحاً يحتاج تأكيدك
+      const it = items.find((i) => i.id === r.item_id);
+      const nameOk = U.sim(l.description, Engine.itemLabel(it)) >= 0.45;
+      const priceOk = it.price > 0 && l.price > 0 && Math.abs(l.price - it.price * factor) / l.price < 0.02;
+      const sure = conf >= 0.9 && factor === 1 && !l.m.note;
+      l.confirmed = sure && (nameOk || priceOk);
+      if (sure && !l.confirmed) l.m.note = 'اقتراح الذكاء الاصطناعي: الاسم مختلف والسعر غير مطابق لسعر العرض — راجع الربط';
     }
     return { ai: true, count: todo.length };
   }

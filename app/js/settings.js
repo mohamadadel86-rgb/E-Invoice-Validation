@@ -149,6 +149,7 @@ Settings.categories = async (s) => {
     const wht = h('input', { class: 'input short', type: 'number', step: '0.1', min: '0', value: s.whtRate });
     const idle = h('input', { class: 'input short', type: 'number', min: '5', value: s.idleMinutes || 30 });
     const seg = h('input', { type: 'checkbox', checked: !!s.segregation });
+    const ipl = h('input', { type: 'checkbox', checked: !!s.ipLookup });
     const vatOpts = [{ value: '', label: 'غير محدد (يُحدد لكل صنف)' }, { value: '0', label: 'معفى 0%' }, { value: '14', label: 'خاضع 14%' }];
     U.fill(wrap, 
       h('div', { class: 'card' },
@@ -179,9 +180,10 @@ Settings.categories = async (s) => {
           h('label', { class: 'row' }, h('span', { style: 'min-width:260px' }, 'نسبة ضريبة الخصم والإضافة %'), wht),
           h('label', { class: 'row' }, h('span', { style: 'min-width:260px' }, 'خروج تلقائي بعد عدم النشاط (دقيقة)'), idle),
           h('label', { class: 'row', style: 'align-items:flex-start' }, seg, h('span', null, h('strong', null, 'الفصل بين المُعِد والمعتمِد'), h('div', { class: 'small muted' }, 'من أضاف فواتير أو عدّل في الظرف لا يستطيع اعتماده؛ يعتمده مستخدم آخر لديه صلاحية الاعتماد. (يحتاج مستخدمَين على الأقل بصلاحية الاعتماد)'))),
+          h('label', { class: 'row', style: 'align-items:flex-start' }, ipl, h('span', null, h('strong', null, 'تسجيل عنوان IP العام في سجل الدخول'), h('div', { class: 'small muted' }, 'عند كل دخول يسأل البرنامج خدمة خارجية (api.ipify.org) عن عنوان الإنترنت العام للجهاز ليظهر في سجل الدخول. مقفول افتراضياً حتى لا يتصل البرنامج بأي جهة غير المنظومة.'))),
           h('div', null, h('button', { type: 'button', class: 'btn primary', onClick: async () => {
             const oW = s.whtRate, oI = s.idleMinutes || 30, oS = !!s.segregation;
-            s.whtRate = Number(wht.value) || 0; s.idleMinutes = Math.max(5, Number(idle.value) || 30); s.segregation = seg.checked;
+            s.whtRate = Number(wht.value) || 0; s.idleMinutes = Math.max(5, Number(idle.value) || 30); s.segregation = seg.checked; s.ipLookup = ipl.checked;
             const d = [oW !== s.whtRate ? `نسبة الخصم والإضافة من ${oW}% إلى ${s.whtRate}%` : '', oI !== s.idleMinutes ? `مدة الخروج التلقائي من ${oI} إلى ${s.idleMinutes} دقيقة` : '', oS !== s.segregation ? `الفصل بين المُعِد والمعتمِد: ${s.segregation ? 'مفعّل' : 'متوقف'}` : ''].filter(Boolean).join(' · ');
             if (d) await Activity.add('settings', 'تعديل الإعدادات العامة', { type: 'settings', id: 'general', label: 'إعدادات عامة' }, d);
             await DB.save('settings', s); U.toast('تم الحفظ', 'ok'); } }, 'حفظ')))));
@@ -249,7 +251,9 @@ Settings.userForm = async (existing) => {
     body: h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
       h('label', { class: 'field' }, 'اسم الدخول', username),
       h('label', { class: 'field' }, 'الاسم الظاهر', display),
-      h('label', { class: 'field' }, 'كلمة المرور (8 خانات على الأقل، فيها حرف ورقم)', pass),
+      existing && existing.id === DB.user.id
+        ? h('div', { class: 'small muted' }, 'كلمة مرورك أنت تتغير من تبويب "حسابي" (تحتاج كلمة المرور الحالية).')
+        : h('label', { class: 'field' }, 'كلمة المرور (8 خانات على الأقل، فيها حرف ورقم)', pass),
       h('label', { class: 'field' }, 'الدور', roleSel),
       h('fieldset', { style: 'border:1px solid var(--line);border-radius:8px;padding:10px 14px' }, h('legend', { class: 'small muted' }, 'الصلاحيات'), permWrap)),
     actions: [{

@@ -142,7 +142,17 @@ DB.save = async (name, val) => {
     DB._revs[name] = r.rev;
     DB._cache[name] = val;
     // أختام الخادم على الأظرف (من أعدّ/اعتمد/عدّل) تُطبق على نفس الكائنات المعروضة
-    if (r.stamps && Array.isArray(val)) for (const e of val) if (e && r.stamps[e.id]) Object.assign(e, r.stamps[e.id]);
+    if (r.stamps && Array.isArray(val)) for (const e of val) {
+      const st = e && r.stamps[e.id];
+      if (!st) continue;
+      // البنود التي جمّدها الخادم عند الاعتماد (أو فكّ تجميدها عند إعادة الفتح): {معرّف الفاتورة: {رقم البند: الصنف أو null}}
+      if (st.fz) for (const inv of e.invoices || []) {
+        const m = st.fz[inv.id];
+        if (m) for (const l of inv.lines || []) { if (m[l.n]) l.fz = m[l.n]; else delete l.fz; }
+      }
+      delete st.fz;
+      Object.assign(e, st);
+    }
     // الإعدادات: الخادم دمجها وأخفى الأسرار؛ نعيد قراءتها حتى لا يبقى أي سر في ذاكرة الصفحة
     if (name === 'settings') { delete DB._cache.settings; delete DB._revs.settings; }
     DB.Save.lastSaved = Date.now(); DB.Save.error = '';

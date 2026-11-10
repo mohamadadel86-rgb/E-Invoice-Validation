@@ -166,9 +166,15 @@ class Store {
     await this.mirrorNow(false);
   }
 
-  async _atomic(file, text) {
+  /* كتابة ذرّية: ملف مؤقت ← تثبيت على القرص (fsync) ← إعادة تسمية. بدون fsync قد يترك انقطاع الكهرباء ملفاً فارغاً.
+   * durable=false للنسخة في المكان الثاني (فلاشة بطيئة): تكفي إعادة التسمية */
+  async _atomic(file, text, durable = true) {
     const tmp = file + '.tmp';
-    await fsp.writeFile(tmp, text, 'utf8');
+    const fh = await fsp.open(tmp, 'w');
+    try {
+      await fh.writeFile(text, 'utf8');
+      if (durable) await fh.sync();
+    } finally { await fh.close(); }
     await fsp.rename(tmp, file);
   }
 
@@ -191,7 +197,7 @@ class Store {
     try {
       await fsp.mkdir(this.mirrorDir, { recursive: true });
       const text = await fsp.readFile(this.file);
-      await this._atomic(path.join(this.mirrorDir, 'einvoice-data.einv'), text);
+      await this._atomic(path.join(this.mirrorDir, 'einvoice-data.einv'), text, false);
       const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
       const daily = path.join(this.dailyDir, `einvoice-${day}.einv`);
       if (fs.existsSync(daily)) {

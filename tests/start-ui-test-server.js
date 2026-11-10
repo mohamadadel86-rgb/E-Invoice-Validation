@@ -12,7 +12,8 @@ const H = require('./helpers');
   const ai = await H.startMockAi();
   const eta = await H.startMockEta();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'einv-ui-'));
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  // --port=رقم لتثبيت المنفذ (لتشغيله من أداة معاينة)، وإلا منفذ عشوائي
+  const port = Number((process.argv.find((x) => x.startsWith('--port=')) || '').slice(7)) || 20000 + Math.floor(Math.random() * 20000);
   const tokenFile = path.join(dir, 'access-token');
   const child = spawn(process.execPath, [path.join(H.ROOT, 'server.js'), `--port=${port}`, `--data=${path.join(dir, 'data')}`, `--token-file=${tokenFile}`], {
     env: Object.assign({}, process.env, {

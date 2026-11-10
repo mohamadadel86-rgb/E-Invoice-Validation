@@ -123,7 +123,8 @@ test('F7: ترويسة CSP ورؤوس الأمان موجودة وصارمة', a
     assert.equal(scriptSrc, "script-src 'self'", 'السكربتات من نفس الموقع فقط (لا eval ولا inline ولا CDN)');
     assert.match(csp, /frame-ancestors 'none'/);
     assert.match(csp, /object-src 'none'/);
-    assert.match(csp, /connect-src 'self' https:\/\/generativelanguage\.googleapis\.com https:\/\/api\.anthropic\.com https:\/\/api\.openai\.com https:\/\/api\.ipify\.org/);
+    assert.match(csp, /connect-src 'self'(;|$)/, 'الواجهة لا تتصل إلا بالخادم المحلي');
+    assert.doesNotMatch(csp, /ipify|openai|anthropic|googleapis\.com https|generativelanguage/, 'لا عناوين خارجية في connect-src');
     assert.doesNotMatch(csp, /unsafe-eval/);
     assert.equal(r.headers['x-frame-options'], 'DENY');
     assert.equal(r.headers['x-content-type-options'], 'nosniff');

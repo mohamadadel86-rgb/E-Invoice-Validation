@@ -94,7 +94,8 @@ async function makeUser(admin, username, perms = {}, role = 'auditor') {
 
 /* خادم ضرائب وهمي */
 function startMockEta() {
-  const state = { tokenCalls: [], searchAuth: [] };
+  // docs: حالة كل مستند على المنظومة الوهمية {uuid: {status, receiverId}} · detailCalls: من سأل عن تفاصيل أي مستند
+  const state = { tokenCalls: [], searchAuth: [], docs: {}, detailCalls: [] };
   const srv = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/connect/token') {
       const m = String(req.headers.authorization || '').match(/^Basic (.+)$/);
@@ -120,6 +121,14 @@ function startMockEta() {
         return res.end(JSON.stringify({ result, metadata: { continuationToken: 'EndofResultSet' } }));
       }
       return res.end(JSON.stringify({ result: [{ uuid: 'U1' }], metadata: { continuationToken: 'EndofResultSet' } }));
+    }
+    const dm = req.url.match(/^\/api\/v1\.0\/documents\/([A-Za-z0-9]+)\/details/);
+    if (dm) {
+      state.detailCalls.push(dm[1]);
+      const ok = /^Bearer T-/.test(String(req.headers.authorization || ''));
+      const d = state.docs[dm[1]];
+      res.writeHead(!ok ? 401 : d ? 200 : 404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(ok && d ? Object.assign({ uuid: dm[1] }, d) : { error: ok ? 'not found' : 'unauthorized' }));
     }
     res.writeHead(404); res.end();
   });

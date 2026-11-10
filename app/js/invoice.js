@@ -89,6 +89,9 @@ Invoice.parse = (text) => {
       vatTotal: sum('vatAmount'),
       otherTaxes: sum('otherTaxes'),
       total: U.r2(sum('netTotal') + sum('vatAmount') + sum('otherTaxes')),
+      // إجمالي المستند كما سجّله المورد على المنظومة، والخصم الإجمالي على الفاتورة (للمطابقة مع مجموع البنود)
+      docTotal: doc.totalAmount != null && Number.isFinite(Number(doc.totalAmount)) ? U.r2(Number(doc.totalAmount)) : null,
+      extraDiscount: U.r2(Number(doc.extraDiscountAmount) || 0),
       lines,
       addedAt: new Date().toISOString(),
     };
